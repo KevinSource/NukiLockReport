@@ -8,11 +8,28 @@ using NukiLockReport;
 // writes them to an .xlsx in Documents\Nuki Reports and opens it in Excel.
 // Errors are printed in red; if there were any, the window waits for a key before closing.
 
-// Dates are shown at the lock's local time (Panama, UTC-5, no daylight saving), which is how Nuki Web displays them
-var lockZone = TimeZoneInfo.FindSystemTimeZoneById("SA Pacific Standard Time");
-const string ZoneLabel = "Panama time";
-
 var errors = new List<string>();
+
+// Dates are converted from UTC to this zone. Set it to the lock's time zone so they match Nuki Web.
+var (zoneSetting, zoneSource) = Secrets.Get(Secrets.TimeZoneKey, Secrets.TimeZoneEnv);
+var lockZone = TimeZoneInfo.Local;
+string zoneSetBy = "Not set - using this PC's time zone";
+if (zoneSetting != null)
+{
+    try
+    {
+        lockZone = TimeZoneInfo.FindSystemTimeZoneById(zoneSetting);
+        zoneSetBy = zoneSource!;
+    }
+    catch (Exception ex) when (ex is TimeZoneNotFoundException or InvalidTimeZoneException)
+    {
+        Error($"Time zone \"{zoneSetting}\" ({zoneSource}) is not a known time zone, so dates use this PC's time zone. " +
+              "See the Settings sheet in the report for how to fix it.");
+        zoneSetBy = $"\"{zoneSetting}\" ({zoneSource}) is not a known time zone - using this PC's time zone";
+    }
+}
+string zoneLabel = lockZone.Id;
+
 try
 {
     await Run();
@@ -106,8 +123,8 @@ string BuildWorkbook(List<JsonElement> locks, List<(string LockName, JsonElement
     string[] headers =
     [
         "Lock", "Name", "Type", "Code", "Enabled", "Status", "Date limited",
-        $"Valid from ({ZoneLabel})", $"Valid until ({ZoneLabel})", "Days", "Time window",
-        "Remote allowed", $"Last active ({ZoneLabel})", $"Created ({ZoneLabel})"
+        $"Valid from ({zoneLabel})", $"Valid until ({zoneLabel})", "Days", "Time window",
+        "Remote allowed", $"Last active ({zoneLabel})", $"Created ({zoneLabel})"
     ];
     WriteHeaders(ws, headers);
 
@@ -185,7 +202,53 @@ string BuildWorkbook(List<JsonElement> locks, List<(string LockName, JsonElement
     }
     Finish(ls, lockHeaders.Length, row - 1);
 
-    string folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Nuki Reports");
+    // ---------------------------------------------------------------- Settings
+    var ss = wb.Worksheets.Add("Settings");
+    WriteHeaders(ss, ["Setting", "Value"]);
+    TimeSpan offset = lockZone.GetUtcOffset(DateTime.UtcNow);
+    string[,] settings =
+    {
+        { "Time zone", lockZone.Id },
+        { "Description", lockZone.DisplayName },
+        { "UTC offset now", $"UTC{(offset < TimeSpan.Zero ? "-" : "+")}{offset:hh\\:mm}" },
+        { "Set by", zoneSetBy },
+        { "Report created", $"{DateTime.Now:yyyy-MM-dd HH:mm} ({TimeZoneInfo.Local.Id}, this PC)" }
+    };
+    for (int i = 0; i < settings.GetLength(0); i++)
+    {
+        ss.Cell(i + 2, 1).Value = settings[i, 0];
+        ss.Cell(i + 2, 2).Value = settings[i, 1];
+    }
+
+    string example = zoneSetting ?? "America/New_York";
+    string[] help =
+    [
+        "All dates in this report are converted from UTC to the time zone above.",
+        "Set it to the lock's time zone so the dates match what Nuki Web and the Nuki app show.",
+        "",
+        "Option 1 - edit the settings file (works for the installed .exe). Add or change this line:",
+        $"    \"{Secrets.TimeZoneKey}\": \"{example}\",",
+        $"    in {Secrets.FilePath}",
+        "Option 2 - from the NukiLockReport project folder (needs the .NET SDK):",
+        $"    dotnet user-secrets set \"{Secrets.TimeZoneKey}\" \"{example}\"",
+        $"Option 3 - set the {Secrets.TimeZoneEnv} environment variable. It takes priority over options 1 and 2.",
+        "",
+        "Names: IANA names such as America/New_York, America/Chicago or Europe/Berlin,",
+        "    or Windows names such as Eastern Standard Time (list them with: tzutil /l).",
+        "Remove the setting to use this PC's time zone. Run the report again after changing it."
+    ];
+    int helpRow = settings.GetLength(0) + 3;
+    ss.Cell(helpRow, 1).Value = "How to change the time zone";
+    ss.Cell(helpRow, 1).Style.Font.Bold = true;
+    for (int i = 0; i < help.Length; i++)
+        ss.Cell(helpRow + 1 + i, 1).Value = help[i];
+
+    ss.Column(1).Width = 18;
+    ss.Column(2).Width = 60;
+    if (zoneSetBy.Contains("not a known"))
+        ss.Cell(5, 2).Style.Fill.BackgroundColor = XLColor.FromHtml("#FFC7CE");
+
+    string folder =Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Nuki Reports");
     Directory.CreateDirectory(folder);
     string path = Path.Combine(folder, $"Nuki Locks {DateTime.Now:yyyy-MM-dd HHmmss}.xlsx");
     wb.SaveAs(path);
