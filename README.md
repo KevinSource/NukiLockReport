@@ -36,6 +36,8 @@ dotnet user-secrets set "Nuki:TimeZone" "Europe/Berlin"
 
 You can also use environment variables instead, which take priority: `NUKI_API_TOKEN` and `NUKI_TIME_ZONE`.
 
+The settings file is found through the Windows profile of whoever runs the program, so **each Windows user has their own token and time zone**. On another PC, or for another user on the same PC, run the setup again. The file is shared with [NukiApiProbe](https://github.com/KevinSource/NukiApiProbe), so a token stored for one works for the other.
+
 ### Time zone
 
 Nuki returns all dates in UTC. The report converts them to the time zone you set, so use **the lock's time zone** to match what Nuki Web and the Nuki app show.
